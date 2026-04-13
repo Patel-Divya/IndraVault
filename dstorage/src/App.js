@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Web3 from 'web3';
 import DStorage from './abis/DStorage.json';
 
+
 import './App.css';
 import { ToastProvider } from './components/Toast';
 import ChainCanvas from './components/ChainCanvas';
@@ -12,6 +13,9 @@ import NetworkModal from './components/NetworkModal';
 import Home       from './pages/Home';
 import Vault      from './pages/Vault';
 import FileViewer from './pages/FileViewer';
+import { SHA256 } from 'crypto-js';
+import { importKey } from './encryption';
+
 
 /* ── Cursor + ripple (mounted once at root) ────────────── */
 class CursorManager extends Component {
@@ -173,6 +177,7 @@ class App extends Component {
       if (!key) {
         const message   = 'Login to DStorage Secure Session';
         const signature = await web3.eth.personal.sign(message, account);
+
         sessionStorage.setItem('encryptionKey', signature);
         this.setState({ encryptionKey: signature });
       } else {

@@ -1,11 +1,7 @@
 **/node_modules/
 .vscode/
 Backup/
-Backup - With delete/
-backup - with delete and new UI/
 components/
-ask.md
-dstorage.zip
-Encryptor.zip
-idea-implementation.md
-idia-by-gpt.md
+/Backup with delete and new UI
+/Backup with streamed downloads
+Prompt.md

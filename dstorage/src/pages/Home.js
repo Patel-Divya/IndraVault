@@ -85,7 +85,7 @@ export default function Home() {
       <section className="iv-section" id="how-section">
         <RevealSection>
           <div className="divider-rune"><span className="rune-glyph">◈ THE PROTOCOL ◈</span></div>
-          <span className="section-tag">// How It Works</span>
+          {/*<span className="section-tag">// How It Works</span>*/}
           <h2 className="section-title">Four Steps to Immortal Storage</h2>
         </RevealSection>
 
@@ -106,7 +106,7 @@ export default function Home() {
       <section className="iv-section">
         <RevealSection>
           <div className="divider-rune"><span className="rune-glyph">◈ THE ARSENAL ◈</span></div>
-          <span className="section-tag">// Features</span>
+          {/*<span className="section-tag">// Features</span>*/}
           <h2 className="section-title">Divine-Grade Security Architecture</h2>
         </RevealSection>
 

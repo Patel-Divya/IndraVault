@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CryptoJS from 'crypto-js';
-import { encryptFile } from '../encryption';
+import { encryptChunk, importKey } from '../encryption';
 import { convertBytes, getFileIcon, formatTime, showNotification } from '../helpers';
 import { useToast } from '../components/Toast';
 
@@ -79,17 +79,63 @@ export default function Vault({ files, account, dstorage, encryptionKey, network
 
     try {
       // Encrypt
-      const encrypted = encryptFile(buffer, encryptionKey);
-      setProgress(35);
+      const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
 
-      // Upload to file server
-      const blob = new Blob([encrypted], { type: 'text/plain' });
-      const data = new FormData();
-      data.append('file', blob, fileName);
+      const file = new Blob([buffer]);
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      const res    = await fetch('http://localhost:9000/upload', { method: 'POST', body: data });
+      const key = await importKey(encryptionKey); 
+      console.log("key:", key);     
+
+      const fileId = Date.now().toString(); // temp id
+
+      let uploadedChunks = [];
+
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const chunkBuffer = await chunk.arrayBuffer();
+        
+        const { iv, data } = await encryptChunk(chunkBuffer, key);
+
+        const formData = new FormData();
+        formData.append("fileId", fileId);
+        formData.append("index", i);
+        formData.append("iv", JSON.stringify(iv));
+        formData.append("chunk", new Blob([data]));
+
+        await fetch("http://localhost:9000/upload-chunk", {
+          method: "POST",
+          body: formData
+        });
+
+        uploadedChunks.push({ index: i, iv });
+
+        setProgress(10 + (i / totalChunks) * 60);
+      }
+
+      const manifest = {
+        fileName,
+        fileType,
+        totalChunks,
+        chunkSize: CHUNK_SIZE,
+        chunks: uploadedChunks,
+        size: file.size
+      };
+
+      const manifestBlob = new Blob([JSON.stringify(manifest)]);
+
+      const formData = new FormData();
+      formData.append("fileId", fileId);
+      formData.append("manifest", manifestBlob);
+
+      const res = await fetch("http://localhost:9000/upload-manifest", {
+        method: "POST",
+        body: formData
+      });
+
+      console.log("res: ", res);      
+
       const result = await res.json();
-      setProgress(60);
 
       // Scramble hash preview
       setHashText(result.hash);
@@ -99,10 +145,12 @@ export default function Vault({ files, account, dstorage, encryptionKey, network
 
       // On-chain transaction
       const type = fileType || 'none';
+      console.log("File size: ",file.size);
+      
       await new Promise((resolve, reject) => {
         dstorage.methods.uploadFile(
           result.hash,
-          result.size,
+          file.size,
           type,
           fileName,
           description
@@ -131,8 +179,8 @@ export default function Vault({ files, account, dstorage, encryptionKey, network
   };
 
   /* ── Generate access key (from Main.js) ───────────────── */
-  const generateAccessKey = (wallet, encKey, fileHash, fName, fType) => {
-    const payload    = JSON.stringify({ key: encKey, hash: fileHash, name: fName, type: fType });
+  const generateAccessKey = (wallet, encKey, fileHash, fName, fType, fsize) => {
+    const payload    = JSON.stringify({ key: encKey, hash: fileHash, name: fName, type: fType, size: fsize });
     return CryptoJS.AES.encrypt(payload, wallet).toString();
   };
 
@@ -146,7 +194,7 @@ export default function Vault({ files, account, dstorage, encryptionKey, network
     const currentKey = sessionStorage.getItem('encryptionKey');
     if (!currentKey) { toast('Session key missing — please re-sign.', 'error'); return; }
 
-    const accessKey = generateAccessKey(recipient, currentKey, file.fileHash, file.fileName, file.fileType);
+    const accessKey = generateAccessKey(recipient, currentKey, file.fileHash, file.fileName, file.fileType, file.fileSize);
     const link      = `${window.location.origin}/viewer/${encodeURIComponent(accessKey)}`;
 
     try {
@@ -160,7 +208,7 @@ export default function Vault({ files, account, dstorage, encryptionKey, network
   /* ── View own file ────────────────────────────────────── */
   const viewFile = (file) => {
     const key       = sessionStorage.getItem('encryptionKey');
-    const accessKey = generateAccessKey(file.uploader, key, file.fileHash, file.fileName, file.fileType);
+    const accessKey = generateAccessKey(file.uploader, key, file.fileHash, file.fileName, file.fileType, file.fileSize);
     navigate(`/viewer/${encodeURIComponent(accessKey)}`);
   };
 

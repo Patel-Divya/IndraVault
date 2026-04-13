@@ -8,104 +8,149 @@ const path = require("path")
 const app = express()
 app.use(cors())
 
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // storage folder
-const upload = multer({ dest: "uploads/" })
+const upload = multer({ 
+  dest: "uploads/",
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB per chunk
+});
 
-app.post("/upload", upload.single("file"), (req, res) => {
-  try {
-    const filePath = req.file.path
+app.post("/upload-chunk", upload.single("chunk"), (req, res) => {
+  const { fileId, index } = req.body;
 
-    const hash = crypto.createHash("sha256")
-    const stream = fs.createReadStream(filePath)
+  const dir = path.join(__dirname, "uploads", fileId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    stream.on("data", data => hash.update(data))
+  const chunkPath = path.join(dir, `chunk_${index}`);
+  fs.renameSync(req.file.path, chunkPath);
 
-    stream.on("end", () => {
-      const digest = hash.digest("hex")
-      const newPath = path.join("uploads", digest)
+  res.json({ success: true });
+});
 
-      if (!fs.existsSync(newPath)) {
-        fs.renameSync(filePath, newPath)
-      } else {
-        fs.unlinkSync(filePath)
+app.post("/upload-manifest", upload.single("manifest"), (req, res) => {
+  const { fileId } = req.body;
+
+  const dir = path.join(__dirname, "uploads", fileId);
+  const manifestPath = path.join(dir, "manifest.json");
+  // console.log("manifest path: ",manifestPath);
+  
+  fs.renameSync(req.file.path, manifestPath);
+
+  // hash manifest
+  const data = fs.readFileSync(manifestPath);
+  const hash = crypto.createHash("sha256").update(data).digest("hex");
+  // console.log("data: ",data, ", Hash:", hash);  
+
+  const finalPath = path.join(__dirname, "uploads", hash);
+  // console.log("final path: ", finalPath);
+  
+  if (fs.existsSync(finalPath)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    res.json({ hash });
+  } 
+  setTimeout(() => {
+    fs.rename(dir, finalPath, (err) => {
+      if (err) {
+        console.error("Rename failed:", err);
+
+        // fallback
+        fs.cpSync(dir, finalPath, { recursive: true });
+        fs.rmSync(dir, { recursive: true, force: true });
       }
 
-      res.json({
-        hash: digest,
-        size: req.file.size
-      })
-    })
-  } catch (err) {
-
-    console.error("UPLOAD ERROR:", err)
-
-    res.status(500).json({
-      error: "Upload error",
-      details: err.message
-    })
-
-  }
-})
-
-// upload endpoint
-// app.post("/upload", upload.single("file"), (req, res) => {
-//   try {
-//     const file = req.file
-
-//     // read file
-//     // const fileBuffer = fs.readFileSync(file.path)
-
-//     // generate SHA256 hash
-//     // const hash = crypto.createHash("sha256").update(fileBuffer).digest("hex")
-
-//     const hash = crypto.createHash("sha256")
-//     const stream = fs.createReadStream(file.path)
-
-//     stream.on("data", data => hash.update(data))
-//     stream.on("end", () => {
-//       const digest = hash.digest("hex")
-//     })
-
-//     // get original extension
-//     // const ext = path.extname(file.originalname)
-
-//     // new filename with extension
-//     // const newName = hash + ext
-//     const newName = hash
-//     const newPath = path.join("uploads", newName)
-
-//     // rename file
-//     fs.renameSync(file.path, newPath)
-
-//     res.json({
-//       hash: hash,
-//       size: file.size,
-//       filename: newName
-//     })
-
-//   } catch (err) {
-//     console.error(err)
-//     res.status(500).send("Upload error")
-//   }
-// })
+      res.json({ hash });
+    });
+  }, 50);
+});
 
 // serve files
-app.get("/file/:hash", (req, res) => {
-  const filePath = path.join(__dirname, "uploads", req.params.hash)
+app.get("/stream/:hash", async (req, res) => {
+  const dir = path.join(__dirname, "uploads", req.params.hash);
 
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).send("File not found")
+  const manifestPath = path.join(dir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    return res.status(404).send("Manifest not found");
   }
 
-  res.sendFile(filePath)
-})
+  const manifest = JSON.parse(fs.readFileSync(manifestPath));
+
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+    "Transfer-Encoding": "chunked"
+  });
+
+  try {
+    for (let i = 0; i < manifest.totalChunks; i++) {
+      const chunkPath = path.join(dir, `chunk_${i}`);
+
+      if (!fs.existsSync(chunkPath)) {
+        throw new Error(`Missing chunk ${i}`);
+      }
+
+      await new Promise((resolve, reject) => {
+        const stream = fs.createReadStream(chunkPath);
+
+        stream.on("data", (data) => res.write(data));
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+    }
+
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.destroy();
+  }
+});
+
+// app.get("/stream/:hash/:start", async (req, res) => {
+//   const start = parseInt(req.params.start) || 0;
+
+//   const dir = path.join(__dirname, "uploads", req.params.hash);
+//   const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json")));
+
+//   res.writeHead(200, {
+//     "Content-Type": "application/octet-stream",
+//     "Transfer-Encoding": "chunked"
+//   });
+
+//   for (let i = start; i < manifest.totalChunks; i++) {
+//     const chunkPath = path.join(dir, `chunk_${i}`);
+
+//     const stream = fs.createReadStream(chunkPath);
+//     await new Promise((resolve) => {
+//       stream.on("data", (d) => res.write(d));
+//       stream.on("end", resolve);
+//     });
+//   }
+
+//   res.end();
+// });
+
+app.get("/stream/:hash/:index", (req, res) => {
+  const index = parseInt(req.params.index);
+
+  const dir = path.join(__dirname, "uploads", req.params.hash);
+  const chunkPath = path.join(dir, `chunk_${index}`);
+
+  if (!fs.existsSync(chunkPath)) {
+    return res.status(404).send("Chunk not found");
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "application/octet-stream",
+  });
+
+  fs.createReadStream(chunkPath).pipe(res);
+});
 
 app.delete("/file/:hash", (req, res) => {
-  const hash = req.params.hash;
-  const filePath = path.join(__dirname, "uploads", hash);
+  const dir = path.join(__dirname, "uploads", req.params.hash);
 
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
     return res.json({ success: true });
   }
 
