@@ -1,5 +1,6 @@
 **/node_modules/
 .vscode/
+.gitignore
 Backup/
 components/
 /Backup with delete and new UI
